@@ -1,0 +1,112 @@
+---
+title: 'Template: Mapping Canada'
+author: "Marco Lugo"
+date: "February 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+options(scipen=999) # avoid scientific notation (useful for legend)
+
+library(RColorBrewer)
+library(maptools)
+library(ggmap)
+library(scales)
+```
+
+## Purpose
+
+This is a quick example on how to create a map in R using shapefiles provided by Statistics Canada. For the purpose of this example we have also collected population density data for map visualization.
+
+- The shapefiles used here can be obtained from: http://www12.statcan.gc.ca/census-recensement/2011/geo/bound-limit/bound-limit-2011-eng.cfm
+
+- Population data (2011 Census) can be downloaded here: http://www12.statcan.gc.ca/census-recensement/2011/dp-pd/hlt-fst/pd-pl/FullFile.cfm?T=1201&LANG=Eng&OFT=CSV&OFN=98-310-XWE2011002-1201.CSV
+
+
+## Load Data
+
+### Load Population Data
+
+```{r load_data1}
+df_pop <- read.csv('98-310-XWE2011002-1201.CSV')
+colnames(df_pop)
+head(df_pop)
+
+# only keep the Forward Sortation Area (FSA; first three characters of the Postal Code) and the pop count
+df_pop <- subset(df_pop, select = c('Geographic.name', 'Population..2011'))
+# Rename variables
+colnames(df_pop) <- c('fsa', 'Population')
+
+# drop the total for Canada as a whole, we are only interested in FSAs
+df_pop <- subset(df_pop, fsa != 'Canada')
+head(df_pop)
+```
+
+### Load Canada FSA Shapefiles
+
+```{r load_data2}
+can_sf <- readShapePoly('FSA/gfsa000b11a_e.shp')
+head(can_sf@data$CFSAUID)
+```
+
+## Prepare Base Map
+
+```{r map_1}
+# In Ubuntu, you may need to run the following command before installing packages rgeos, rgdal and gpclib, which are needed for the fortify command below:
+# sudo apt-get install libgdal1-dev libproj-dev
+
+can_df <- fortify(can_sf, region = 'CFSAUID')
+rm(can_sf) # free up memory
+
+# get map from Google Maps API
+gmap <- qmap("Canada", zoom=3)
+
+# build polygon boundaries from shapefile data
+fsa_boundaries <- geom_polygon(aes(x=long, y=lat, group=group), data=can_df, color='black', fill=NA)
+
+# let's have a look. no population for now
+gmap + fsa_boundaries
+```
+
+The previous map, while it covered all of Canada, may not be ideal for observing FSA-level differences. Let's zoom in.
+
+```{r map_2}
+gmap <- qmap("Montreal, Canada", zoom=12)
+gmap + fsa_boundaries
+```
+
+## Merge Data
+
+```{r merge_data1}
+# add population counts to map data
+can_df <- merge(can_df, df_pop, by.x='id', by.y='fsa', all.x=TRUE)
+```
+
+## Population Map
+
+```{r map_3}
+fsa_boundaries_pop <- geom_polygon(aes(x=long, y=lat, group=group, fill=Population, alpha=0.2), data=can_df, color='black')
+gmap + fsa_boundaries_pop + scale_fill_gradient(low='#ffeda0', high='#f03b20') + scale_alpha(guide='none')
+```
+
+This map is using a population scale that is difficult to understand, let's redesign it.
+
+```{r new_scale1}
+quantile(df_pop$Population, probs=seq(0.0, 1, 0.1), na.rm=TRUE)
+```
+
+We see that 90% of Canadian FSAs have ~40k or below. Let's create new categories that reflect this.
+
+```{r new_scales2}
+new_breaks <- seq(from=0, to=40000, by=10000)
+new_labels <- comma(new_breaks)
+new_labels[length(new_labels)] <- paste0(new_labels[length(new_labels)], '+') # append plus sign for the highest label
+new_labels
+
+gmap + fsa_boundaries_pop +
+  scale_fill_gradient(low='#ffeda0', high='#f03b20', limits=c(0, 40000), breaks=new_breaks, labels=new_labels) + 
+  scale_alpha(guide='none')
+```
+
